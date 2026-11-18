@@ -146,6 +146,13 @@ target_compile_features(shadps4_build_queue_test PRIVATE cxx_std_23)
 target_link_libraries(shadps4_build_queue_test PRIVATE GTest::gtest_main)
 gtest_discover_tests(shadps4_build_queue_test)
 
+# Fast, driver-independent tests for Vulkan timeline resource reuse.
+add_executable(shadps4_resource_pool_selection_test test_resource_pool_selection.cpp)
+target_include_directories(shadps4_resource_pool_selection_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(shadps4_resource_pool_selection_test PRIVATE cxx_std_23)
+target_link_libraries(shadps4_resource_pool_selection_test PRIVATE GTest::gtest_main)
+gtest_discover_tests(shadps4_resource_pool_selection_test)
+
 add_executable(shadps4_driver_cache_file_test test_driver_cache_file.cpp)
 target_include_directories(shadps4_driver_cache_file_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(shadps4_driver_cache_file_test PRIVATE cxx_std_23)
