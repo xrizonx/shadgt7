@@ -35,7 +35,7 @@ $env:LIB = "$($builtins.DirectoryName);$env:LIB"
 
 Invoke-Checked 'cmake' @('-S', '.', '-B', 'Build/pr-compile', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
     '-DCMAKE_C_COMPILER=clang-cl', '-DCMAKE_CXX_COMPILER=clang-cl', '-DCMAKE_LINKER=lld-link',
-    '-DHAVE_ENDIAN_H=OFF', '-DSHADGT_RYTY_GPU=ON', '-DENABLE_DISCORD_RPC=ON', '-DENABLE_TESTS=ON')
+    '-DHAVE_ENDIAN_H=OFF', '-DSHADGT_RYTY_GPU=ON', '-DENABLE_DISCORD_RPC=ON', '-DENABLE_TESTS=OFF')
 # Match the renderer modules shipped by the RyGT7 Windows package adapter.
 Invoke-Checked 'cmake' @('--build', 'Build/pr-compile', '--target',
     'ryty_gpu', 'ryty_audio3d', 'ryty_ajm', 'ryty_ngs2', 'ryty_zlib',
@@ -45,9 +45,15 @@ if (@(Get-ChildItem 'Build/pr-compile' -Recurse -Filter libSceVideoOut.prx).Coun
 }
 
 
-# Verify regressions on the same Clang/Windows toolchain used for the packaged renderer.
-Invoke-Checked 'cmake' @('--build', 'Build/pr-compile', '--target',
+# Main CMakeLists.txt deliberately configures the renderer and unit tests in exclusive
+# modes. Use separate build trees; ENABLE_TESTS=ON suppresses the ryty_gpu target entirely.
+# Both configurations use the same pinned Clang, MSVC SDK, CMake and Ninja toolchain.
+Invoke-Checked 'cmake' @('-S', '.', '-B', 'Build/pr-tests', '-G', 'Ninja',
+    '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=clang-cl',
+    '-DCMAKE_CXX_COMPILER=clang-cl', '-DCMAKE_LINKER=lld-link',
+    '-DHAVE_ENDIAN_H=OFF', '-DENABLE_TESTS=ON')
+Invoke-Checked 'cmake' @('--build', 'Build/pr-tests', '--target',
     'shadps4_resource_pool_selection_test', 'shadps4_shader_object_cache_test',
     'shadps4_build_queue_test', '--parallel', '2')
-Invoke-Checked 'ctest' @('--test-dir', 'Build/pr-compile', '--output-on-failure',
+Invoke-Checked 'ctest' @('--test-dir', 'Build/pr-tests', '--output-on-failure',
     '-R', '^(ResourcePoolSelection|ShaderObjectCache|BuildQueue)\.')
