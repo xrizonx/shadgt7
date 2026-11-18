@@ -203,3 +203,40 @@ TEST(BuildQueue, MaxRunningNarrows) {
     second.join();
     EXPECT_TRUE(got.load());
 }
+
+TEST(BuildQueue, ConcurrentPushAndPopKeepGlobalOutstandingCountBalanced) {
+    // Queues can have idle workers waking for other jobs while a producer is still
+    // enqueueing. Publishing g_build_jobs after releasing the queue mutex lets a
+    // finished job decrement the counter before its producer increments it.
+    BuildQueue queue{4};
+    constexpr int kJobs = 3000;
+    std::atomic<int> executed{};
+    std::stop_source stop;
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 4; ++i) {
+        workers.emplace_back([&] {
+            BuildQueue::Job job;
+            while (queue.Pop(job, stop.get_token())) {
+                job();
+                queue.Finished();
+            }
+        });
+    }
+    for (int i = 0; i < kJobs; ++i) {
+        queue.Push([&] { executed.fetch_add(1, std::memory_order_relaxed); },
+                   BuildQueue::Kind::Normal);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (Vulkan::g_build_jobs.load(std::memory_order_relaxed) != 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    stop.request_stop();
+    queue.NotifyAll();
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    EXPECT_EQ(executed.load(), kJobs);
+    EXPECT_EQ(Vulkan::g_build_jobs.load(std::memory_order_relaxed), 0u);
+    EXPECT_TRUE(queue.ForegroundIdle());
+}

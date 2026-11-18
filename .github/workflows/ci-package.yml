@@ -1,6 +1,10 @@
-name: RyGT7 CI artifacts for renderer changes
+# Builds a complete ryGT7 client with the exact renderer commit from THIS fork.
+# The reusable upstream workflow cannot do this: it fetches RyGT-Team/shadgt7.
+name: RyGT7 Windows client ZIP (fork renderer)
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -9,11 +13,132 @@ permissions:
   contents: read
 
 concurrency:
-  group: renderer-package-${{ github.ref }}
-  cancel-in-progress: false
+  group: rygt7-fork-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  package:
-    uses: RyGT-Team/rygt7/.github/workflows/rygt7-ci.yml@main
-    with:
-      renderer_sha: ${{ github.sha }}
+  resolve:
+    name: Pin upstream RyGT7 and fork renderer revisions
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.revisions.outputs.source_sha }}
+      renderer_sha: ${{ steps.revisions.outputs.renderer_sha }}
+    steps:
+      - name: Resolve exact build revisions
+        id: revisions
+        shell: bash
+        env:
+          RENDERER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          upstream=$(git ls-remote https://github.com/RyGT-Team/rygt7.git refs/heads/main)
+          source_sha="${upstream%%$'\t'*}"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Bad upstream source SHA'; exit 1; }
+          [[ "$RENDERER_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Bad renderer commit SHA'; exit 1; }
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "renderer_sha=$RENDERER_SHA" >> "$GITHUB_OUTPUT"
+          echo "Full client from rygt7 $source_sha and fork shadgt7 $RENDERER_SHA"
+
+  windows:
+    name: Compile, validate, and zip complete RyGT7 client
+    needs: resolve
+    # Never run a third party's unreviewed PR code with the full-package toolchain.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+      RENDERER_SHA: ${{ needs.resolve.outputs.renderer_sha }}
+    steps:
+      - name: Support long dependency paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        id: msys2
+        with:
+          msystem: UCRT64
+          location: C:/msys64
+          update: true
+          cache: false
+          install: >-
+            base-devel git
+
+      - name: Fetch pinned official RyGT7 runtime and prepare fork-aware controller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid source SHA' }
+          $source = 'C:/rygt7-ci/source'
+          New-Item -ItemType Directory -Path $source -Force | Out-Null
+          git -C $source init
+          if ($LASTEXITCODE) { throw 'git init failed' }
+          git -C $source config core.longpaths true
+          git -C $source remote add origin https://github.com/RyGT-Team/rygt7.git
+          if ($LASTEXITCODE) { throw 'git remote failed' }
+          git -C $source fetch --depth=1 origin $env:SOURCE_SHA
+          if ($LASTEXITCODE) { throw 'git fetch failed' }
+          git -C $source checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -or (git -C $source rev-parse HEAD).Trim() -cne $env:SOURCE_SHA) {
+            throw 'Upstream runtime source does not match the pinned revision'
+          }
+          & ./ci/rygt7-fork/prepare-controller.ps1 -SourceRoot $source -DestinationRoot 'C:/rygt7-ci/controller'
+
+      - name: Build full Windows client from source and verify package provenance
+        shell: pwsh
+        env:
+          RYGT_CODESIGN: '1'
+          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . C:/rygt7-ci/controller/setup-tools.ps1
+          & C:/rygt7-ci/controller/build-windows.ps1 -SourceRoot C:/rygt7-ci/source -SourceSha $env:SOURCE_SHA -RendererSha $env:RENDERER_SHA -OutputRoot C:/rygt7-ci/build -MsysRoot $env:MSYS2_ROOT
+          $env:ARTIFACT_DIR = 'C:/rygt7-ci/build/dist'
+          python C:/rygt7-ci/controller/registry_ci.py validate
+          if ($LASTEXITCODE) { throw 'Full RyGT7 client validation failed' }
+          $zips = @(Get-ChildItem -LiteralPath $env:ARTIFACT_DIR -File -Filter 'RyGT7-ci-*.zip')
+          if ($zips.Count -ne 1) { throw "Expected exactly one full RyGT7 ZIP; got $($zips.Count)" }
+          Write-Output "Validated full client ZIP: $($zips[0].FullName)"
+
+      - name: Upload downloadable RyGT7.exe client ZIP and checksums
+        id: zip
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rygt7-windows-${{ needs.resolve.outputs.source_sha }}-renderer-${{ needs.resolve.outputs.renderer_sha }}
+          path: |
+            C:/rygt7-ci/build/dist/RyGT7-ci-*.zip
+            C:/rygt7-ci/build/dist/RyGT7-ci-*.zip.sha256
+            C:/rygt7-ci/build/dist/CI-BUILD.json
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Summarize download and exact revisions
+        shell: pwsh
+        env:
+          ARTIFACT_URL: ${{ steps.zip.outputs.artifact-url }}
+        run: |
+          $digest = @(Get-ChildItem 'C:/rygt7-ci/build/dist' -File -Filter '*.zip.sha256')
+          if ($digest.Count -ne 1) { throw 'Missing expected SHA-256 checksum' }
+          @(
+            '### RyGT7 verified Windows ZIP'
+            ''
+            "RyGT7 source: https://github.com/RyGT-Team/rygt7/commit/$env:SOURCE_SHA"
+            ''
+            "Fork renderer: https://github.com/xrizonx/shadgt7/commit/$env:RENDERER_SHA"
+            ''
+            "Download: $env:ARTIFACT_URL"
+            ''
+            "SHA-256: $(Get-Content -LiteralPath $digest[0].FullName -Raw)"
+            ''
+            'Contains RyGT7.exe, converter and runtime libraries; excludes copyrighted game content and firmware.'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

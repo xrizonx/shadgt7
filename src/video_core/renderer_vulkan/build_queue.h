@@ -51,8 +51,11 @@ public:
             } else {
                 jobs.push_back(std::move(job));
             }
+            // Publish the global count before a worker can pop this job. Updating after
+            // unlocking lets a running worker finish the newly queued job first and
+            // temporarily underflow the count (the compile notice can then stick).
+            g_build_jobs.fetch_add(1, std::memory_order_relaxed); // FIX-GT7-100
         }
-        g_build_jobs.fetch_add(1, std::memory_order_relaxed); // FIX-GT7-100
         cv.notify_one();
     }
 

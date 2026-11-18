@@ -29,3 +29,15 @@ jobs:
       - name: Compile PR merge checkout
         shell: pwsh
         run: ./.github/scripts/compile-renderer.ps1
+      - name: Package eight renderer libraries for ryGT7
+        shell: pwsh
+        run: ./.github/scripts/package-renderer.ps1 -BuildRoot Build/pr-compile -OutputRoot Build/rygt7-renderer-artifact
+      - name: Upload downloadable renderer ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rygt7-renderer-modules-${{ github.event.pull_request.head.sha }}
+          path: |
+            Build/rygt7-renderer-artifact/*.zip
+            Build/rygt7-renderer-artifact/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

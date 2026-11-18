@@ -77,9 +77,12 @@ public:
         // lock: checking `active` outside it let a helper that slept through a batch join while
         // the pieces were being refilled.
         std::unique_lock lk{mutex};
-        while (active.load(std::memory_order_acquire) != 0) {
+        // Helpers can finish after the main thread has copied its share of a batch.
+        // Do not spin at 100% CPU waiting for them: on Zen 3 this can contend with
+        // the worker that is completing the last guest-memory upload.
+        while (const u32 in_flight = active.load(std::memory_order_acquire)) {
             lk.unlock();
-            _mm_pause();
+            active.wait(in_flight, std::memory_order_acquire);
             lk.lock();
         }
         batch_open = false;
@@ -99,8 +102,11 @@ public:
         }
         cv.notify_all();
         CopyPieces();
-        while (done.load(std::memory_order_acquire) != pieces.size()) {
-            _mm_pause();
+        const size_t count = pieces.size();
+        for (size_t completed = done.load(std::memory_order_acquire); completed != count;
+             completed = done.load(std::memory_order_acquire)) {
+            // Only the final piece notifies. Avoid waking this thread on every 64-KB copy.
+            done.wait(completed, std::memory_order_acquire);
         }
     }
 
@@ -127,7 +133,9 @@ private:
                 active.fetch_add(1, std::memory_order_acq_rel);
             }
             CopyPieces();
-            active.fetch_sub(1, std::memory_order_acq_rel);
+            if (active.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                active.notify_all();
+            }
         }
     }
 
@@ -138,7 +146,9 @@ private:
             const auto& piece = pieces[i];
             memory_manager->CopySparseMemory(piece.source, piece.destination, piece.size,
                                              read_capture);
-            done.fetch_add(1, std::memory_order_acq_rel);
+            if (done.fetch_add(1, std::memory_order_acq_rel) + 1 == count) {
+                done.notify_all();
+            }
         }
     }
 
