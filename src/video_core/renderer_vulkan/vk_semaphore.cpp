@@ -65,8 +65,14 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
-    while (instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT) != vk::Result::eSuccess) {
+    const vk::Result wait_result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
+    if (wait_result == vk::Result::eErrorDeviceLost) {
+        // A lost Vulkan device can never signal the timeline. Retrying indefinitely here
+        // strands the scheduler and can freeze shutdown instead of recording the GPU fault.
+        instance.ReportDeviceLost();
     }
+    ASSERT_MSG(wait_result == vk::Result::eSuccess,
+               "Failed waiting for GPU timeline semaphore: {}", vk::to_string(wait_result));
     Refresh();
 }
 
