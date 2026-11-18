@@ -1536,7 +1536,6 @@ bool GraphicsPipeline::CreateShaderObjects(
                                                instance.GetDeviceID());
             // SO-013: format 2 adds a checksum of each binary: a damaged file is never handed to the
             // driver (compiled again and rewritten instead).
-            constexpr u32 CacheMagic = ShaderObjectCacheMagic;
             bool from_binary = false;
             VkResult result = VK_ERROR_UNKNOWN;
             if (use_cache) {
@@ -1601,25 +1600,36 @@ bool GraphicsPipeline::CreateShaderObjects(
                                                         std::this_thread::get_id()));
                     bool ok = false;
                     if (std::FILE* file = std::fopen(temporary.string().c_str(), "wb")) {
+                        // Reject oversized or incomplete driver binaries before serializing.
+                        // The same format validator handles both disk writes and reads.
                         const u32 count = static_cast<u32>(create_infos.size());
-                        ok = std::fwrite(&CacheMagic, 4, 1, file) == 1 &&
-                             std::fwrite(&count, 4, 1, file) == 1;
+                        std::vector<std::vector<u8>> binaries;
+                        binaries.reserve(count);
+                        ok = count != 0 && count <= 4;
                         for (u32 i = 0; ok && i < count; ++i) {
                             size_t size = 0;
                             ok = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetShaderBinaryDataEXT(
                                      instance.GetDevice(), created[i], &size, nullptr) == VK_SUCCESS &&
-                                 size != 0;
+                                 size != 0 && size < (64ull << 20);
+                            if (!ok) {
+                                break;
+                            }
                             std::vector<u8> data(size);
-                            ok = ok && VULKAN_HPP_DEFAULT_DISPATCHER.vkGetShaderBinaryDataEXT(
-                                           instance.GetDevice(), created[i], &size, data.data()) ==
-                                           VK_SUCCESS;
-                            const u64 size64 = size;
-                            const u64 checksum = XXH3_64bits(data.data(), size);
-                            ok = ok && std::fwrite(&size64, 8, 1, file) == 1 &&
-                                 std::fwrite(&checksum, 8, 1, file) == 1 &&
-                                 std::fwrite(data.data(), 1, size, file) == size;
+                            const size_t capacity = data.size();
+                            ok = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetShaderBinaryDataEXT(
+                                     instance.GetDevice(), created[i], &size, data.data()) ==
+                                     VK_SUCCESS &&
+                                 size != 0 && size <= capacity;
+                            if (ok) {
+                                data.resize(size);
+                                binaries.emplace_back(std::move(data));
+                            }
                         }
-                        std::fclose(file);
+                        if (ok) {
+                            ok = WriteShaderObjectBinaries(file, binaries);
+                        }
+                        const bool closed = std::fclose(file) == 0;
+                        ok = ok && closed;
                     }
                     if (ok) {
                         std::filesystem::rename(temporary, cache_file, ec);
