@@ -65,3 +65,33 @@ TEST(ShaderObjectCache, RejectsWrongStageCountAndOversizedAllocation) {
     EXPECT_TRUE(Vulkan::ReadShaderObjectBinaries(count.get(), 2).empty());
     EXPECT_TRUE(Vulkan::ReadShaderObjectBinaries(oversized.get(), 1).empty());
 }
+
+TEST(ShaderObjectCache, WriterRoundTripsMultipleShaderStages) {
+    File file{std::tmpfile(), &std::fclose};
+    ASSERT_TRUE(file);
+    const std::vector<std::vector<std::uint8_t>> expected{
+        {1, 2, 3, 4}, {10, 20, 30, 40, 50}};
+    ASSERT_TRUE(Vulkan::WriteShaderObjectBinaries(file.get(), expected));
+    std::rewind(file.get());
+    EXPECT_EQ(Vulkan::ReadShaderObjectBinaries(file.get(), 2), expected);
+}
+
+TEST(ShaderObjectCache, WriterRejectsInvalidInputWithoutTouchingFile) {
+    File file{std::tmpfile(), &std::fclose};
+    ASSERT_TRUE(file);
+    EXPECT_FALSE(Vulkan::WriteShaderObjectBinaries(nullptr, {{1}}));
+    EXPECT_FALSE(Vulkan::WriteShaderObjectBinaries(file.get(), {}));
+    EXPECT_FALSE(Vulkan::WriteShaderObjectBinaries(file.get(), {{}}));
+    EXPECT_FALSE(Vulkan::WriteShaderObjectBinaries(file.get(),
+                                                   {{1}, {2}, {3}, {4}, {5}}));
+    EXPECT_EQ(std::ftell(file.get()), 0L);
+}
+
+TEST(ShaderObjectCache, WriterRejectsOversizedDriverBinary) {
+    File file{std::tmpfile(), &std::fclose};
+    ASSERT_TRUE(file);
+    std::vector<std::vector<std::uint8_t>> oversized(1);
+    oversized.front().resize(64ull << 20);
+    EXPECT_FALSE(Vulkan::WriteShaderObjectBinaries(file.get(), oversized));
+    EXPECT_EQ(std::ftell(file.get()), 0L);
+}
