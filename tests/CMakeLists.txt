@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+# The unique_function tests link to Threads::Threads. This imported target must be
+# declared explicitly when tests are enabled (including Windows/clang-cl CI).
+find_package(Threads REQUIRED)
+
 # Find or download Google Test
 include(FetchContent)
     FetchContent_Declare(
