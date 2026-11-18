@@ -779,7 +779,7 @@ public:
     PipelineBuildWorkers() : queue{CompileConcurrency()} {
         // Concurrent driver pipeline compilations stay bounded (the queue's limit): large bursts
         // can overwhelm the driver while the game and its pipeline linker use the GPU.
-        for (u32 i = 0; i < AllCores(); ++i) {
+        for (u32 i = 0; i < MaxParallelBuilds(); ++i) {
             threads.emplace_back([this](std::stop_token stop) { Work(stop); });
         }
     }
@@ -886,8 +886,7 @@ public:
 
 private:
     void ApplyExtra() {
-        const u32 widest = std::clamp(AllCores() > 4 ? AllCores() - 4 : 0u,
-                                      CompileConcurrency(), 12u);
+        const u32 widest = MaxParallelBuilds();
         const u32 width = in_play          ? PlayWidth() // FIX-GT7-109
                           : waiting > 0    ? widest
                           : backlog        ? std::clamp(8u, CompileConcurrency(), widest)
@@ -918,6 +917,14 @@ private:
 
     static u32 AllCores() {
         return std::max(std::thread::hardware_concurrency(), NumWorkers());
+    }
+
+    /// Spawn only as many threads as the queue can ever run. On a 5900X the previous
+    /// AllCores() created 24 threads although at most 12 could run, wasting stacks,
+    /// scheduling work and condition-variable wakeups without adding throughput.
+    static u32 MaxParallelBuilds() {
+        const u32 cores = AllCores();
+        return std::clamp(cores > 4 ? cores - 4 : 0u, CompileConcurrency(), 12u);
     }
 
     static u32 NumWorkers() {
