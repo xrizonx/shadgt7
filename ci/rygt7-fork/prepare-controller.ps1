@@ -32,7 +32,7 @@ function Replace-Exact([string]$File, [string]$From, [string]$To) {
 # The original source's build-support/renderer.json still points to the official
 # renderer, and the controller still rejects a change to that configured pin.
 $build = Join-Path $destination 'build-windows.ps1'
-Replace-Exact $build `$mirror = 'https://github.com/RyGT-Team/shadgt7.git' `$mirror = 'https://github.com/xrizonx/shadgt7.git'
+Replace-Exact $build "`$mirror = 'https://github.com/RyGT-Team/shadgt7.git'" "`$mirror = 'https://github.com/xrizonx/shadgt7.git'"
 
 # Validate that BUILD_INFO.json describes exactly the fork whose files were
 # fetched; don't weaken the archive hash, runtime-origin, or trust checks.
